@@ -1,134 +1,159 @@
 // =============================
 // File: frontend/script.js
 // =============================
-const el = (id) => document.getElementById(id);
 
+// -----------------------------
+// Utility helper
+// -----------------------------
+function el(id) {
+  return document.getElementById(id);
+}
+
+// -----------------------------
+// Copy text to clipboard
+// -----------------------------
+async function copyText(text, btn) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // Fallback for older browsers
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    // UI feedback
+    const old = btn.textContent;
+    btn.textContent = "Copied";
+    setTimeout(() => (btn.textContent = old), 1200);
+  } catch (err) {
+    alert("Failed to copy: " + err);
+  }
+}
+
+// -----------------------------
+// Create short link
+// -----------------------------
 async function createLink() {
-  const url = el("url").value.trim();
-  const slug = el("slug").value.trim();
-  el("msg").textContent = "";
-  el("resultBox").classList.add("hidden");
+  const longUrl = el("urlInput").value.trim();
+  if (!longUrl) {
+    alert("Enter a URL");
+    return;
+  }
 
-  if (!/^https?:\/\//i.test(url)) {
-    el("msg").textContent = "Enter a valid http/https URL.";
+  // Basic validation
+  if (!/^https?:\/\//i.test(longUrl)) {
+    alert("Invalid URL (must start with http:// or https://)");
     return;
   }
 
   try {
-    const res = await fetch("/api/create", {
+    const res = await fetch("/create", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, slug: slug || undefined }),
+      body: JSON.stringify({ url: longUrl }),
     });
+
+    if (!res.ok) throw new Error("Request failed");
+
     const data = await res.json();
-    if (!data.ok) throw new Error(data.error || "Failed to create link");
+    const shortUrl =
+      window.location.protocol + "//" + window.location.host + "/r/" + data.slug;
 
-    // ✅ Always full short URL (absolute)
-    const shortUrl = `${window.location.protocol}//${window.location.host}/r/${data.id}`;
-
-    // Show result
+    // Update UI
     el("resultBox").classList.remove("hidden");
-    const a = el("shortLink");
-    a.href = shortUrl;
-    a.textContent = shortUrl;
+    el("shortLink").href = shortUrl;
+    el("shortLink").textContent = shortUrl;
 
-    const openBtn = el("btnOpen");
-    openBtn.href = shortUrl;
-
-    // QR code
-    const box = el("qrcode");
-    box.innerHTML = "";
-    new QRCode(box, {
+    // Clear QR and regenerate (responsive)
+    el("qrBox").innerHTML = "";
+    new QRCode(el("qrBox"), {
       text: shortUrl,
       width: 160,
       height: 160,
-      correctLevel: QRCode.CorrectLevel.M,
     });
+    el("qrBox").querySelector("img").style.maxWidth = "100%";
 
-    await loadRecent();
-  } catch (e) {
-    el("msg").textContent = e.message;
+    loadRecent();
+  } catch (err) {
+    alert("Failed to create: " + err.message);
   }
 }
 
+// -----------------------------
+// Load recent links
+// -----------------------------
 async function loadRecent() {
   try {
-    const res = await fetch("/api/links");
-    const data = await res.json();
-    if (!data.ok) return;
-    const wrap = el("recent");
-    wrap.innerHTML = "";
+    const res = await fetch("/recent");
+    if (!res.ok) throw new Error("Fetch failed");
 
-    if (!data.rows.length) {
-      wrap.innerHTML = '<div class="text-gray-500">No links yet.</div>';
+    const data = await res.json();
+    const box = el("recent");
+    box.innerHTML = "";
+
+    if (!data.links || data.links.length === 0) {
+      box.innerHTML =
+        "<p class='text-gray-500 italic'>No recent links yet.</p>";
       return;
     }
 
-    data.rows.forEach((r) => {
-      const shortUrl = `${window.location.protocol}//${window.location.host}/r/${r.id}`;
-      const s = `
-        <div class="flex items-center justify-between gap-3 border border-gray-200 rounded-lg p-3">
-          <div class="min-w-0">
-            <div class="font-medium truncate">${shortUrl}</div>
-            <div class="text-gray-500 truncate">${r.url}</div>
-          </div>
-          <div class="flex items-center gap-2 shrink-0">
-            <a class="text-sm underline" href="${shortUrl}" target="_blank">Open</a>
-            <button class="text-sm underline" data-copy="${shortUrl}">Copy</button>
-          </div>
-        </div>`;
-      const div = document.createElement("div");
-      div.innerHTML = s;
-      wrap.appendChild(div.firstElementChild);
-    });
+    data.links.forEach((l) => {
+      const shortUrl =
+        window.location.protocol + "//" + window.location.host + "/r/" + l.slug;
 
-    // ✅ Reliable copy handling
-    wrap.querySelectorAll("[data-copy]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const text = btn.getAttribute("data-copy");
-        try {
-          await navigator.clipboard.writeText(text);
-          btn.textContent = "Copied";
-        } catch {
-          // fallback (execCommand for Safari/older browsers)
-          const tmp = document.createElement("textarea");
-          tmp.value = text;
-          document.body.appendChild(tmp);
-          tmp.select();
-          document.execCommand("copy");
-          document.body.removeChild(tmp);
-          btn.textContent = "Copied";
-        }
-        setTimeout(() => (btn.textContent = "Copy"), 1200);
-      });
+      const div = document.createElement("div");
+      div.className =
+        "flex items-center justify-between bg-gray-50 dark:bg-gray-700 rounded-xl px-3 py-2";
+
+      div.innerHTML = `
+        <a href="${shortUrl}" target="_blank" class="truncate text-blue-600 dark:text-blue-400">
+          ${shortUrl}
+        </a>
+        <div class="flex gap-2 ml-2 flex-shrink-0">
+          <button class="text-sm bg-gray-200 dark:bg-gray-600 px-2 py-1 rounded copyBtn">Copy</button>
+          <a href="${shortUrl}" target="_blank" class="text-sm bg-blue-500 text-white px-2 py-1 rounded">Open</a>
+        </div>
+      `;
+
+      // Attach copy handler
+      div.querySelector(".copyBtn").addEventListener("click", (e) =>
+        copyText(shortUrl, e.target)
+      );
+
+      box.appendChild(div);
     });
-  } catch (e) {
-    console.error("Failed to load recent links:", e);
+  } catch (err) {
+    el("recent").innerHTML =
+      "<p class='text-red-500 italic'>Failed to load recent links.</p>";
+    console.error(err);
   }
 }
 
-// Events
-addEventListener("DOMContentLoaded", () => {
+// -----------------------------
+// Init
+// -----------------------------
+document.addEventListener("DOMContentLoaded", () => {
+  // Handle form submit (Enter key)
+  const form = el("formCreate");
+  if (form) {
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      createLink();
+    });
+  }
+
+  // Handle button click
   el("btnGen").addEventListener("click", createLink);
 
-  el("btnCopy").addEventListener("click", async () => {
-    const t = el("shortLink").textContent;
-    if (t) {
-      try {
-        await navigator.clipboard.writeText(t);
-      } catch {
-        const tmp = document.createElement("textarea");
-        tmp.value = t;
-        document.body.appendChild(tmp);
-        tmp.select();
-        document.execCommand("copy");
-        document.body.removeChild(tmp);
-      }
-      el("btnCopy").textContent = "Copied";
-      setTimeout(() => (el("btnCopy").textContent = "Copy"), 1200);
-    }
+  // Handle copy of current link
+  el("btnCopy").addEventListener("click", () => {
+    const link = el("shortLink").textContent;
+    if (link) copyText(link, el("btnCopy"));
   });
 
-  el("btnRefresh").addEventListener("click", loadRecent);
   loadRecent();
 });
