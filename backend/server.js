@@ -1,4 +1,4 @@
-// =============================
+// ============================= 
 // File: backend/server.js
 // =============================
 const express = require("express");
@@ -12,7 +12,8 @@ const PORT = 3000;
 // shape: { [id]: { url, slug, createdAt } }
 const linkStore = {};
 
-app.use(express.json());
+// 🔒 Permanent link storage (simulate DB for now)
+const permanentLinks = {};
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "../frontend"))); // serve frontend files
@@ -21,7 +22,6 @@ app.use(express.static(path.join(__dirname, "../frontend"))); // serve frontend 
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "../frontend/index.html"));
 });
-
 
 // --- helpers ---
 function isValidHttpUrl(str) {
@@ -38,7 +38,6 @@ function generateId(n = 4) {
 }
 
 function detectApp(urlStr) {
-  // returns { app: 'youtube'|'whatsapp'|'telegram'|'instagram'|'amazon'|'twitter'|'facebook'|null, meta }
   try {
     const u = new URL(urlStr);
     const host = u.hostname.replace(/^www\./, "");
@@ -56,23 +55,20 @@ function detectApp(urlStr) {
 }
 
 function buildDeepLink(urlStr, userAgent) {
-  // returns { ios, androidIntent, fallback }
   const { app, meta } = detectApp(urlStr);
   const fallback = urlStr;
   let ios = null;
   let androidIntent = null;
 
   const u = meta.u;
+  const chromeFallback = `googlechrome://${fallback.replace(/^https?:\/\//, "")}`; // ✅ Chrome fallback
 
   switch (app) {
     case "youtube": {
-      // Try to extract video id
       let vId = u.searchParams.get("v");
       if (!vId && u.hostname === "youtu.be") vId = u.pathname.slice(1);
-      // iOS scheme
       if (vId) ios = `youtube://watch?v=${vId}`; else ios = `youtube://`;
-      // Android intent with package + browser fallback
-      const fb = encodeURIComponent(fallback);
+      const fb = encodeURIComponent(chromeFallback);
       if (vId) {
         androidIntent = `intent://watch?v=${vId}#Intent;scheme=https;package=com.google.android.youtube;S.browser_fallback_url=${fb};end`;
       } else {
@@ -81,7 +77,6 @@ function buildDeepLink(urlStr, userAgent) {
       break;
     }
     case "whatsapp": {
-      // Preserve text/phone params
       let waPath = "send";
       const text = u.searchParams.get("text");
       const phone = u.searchParams.get("phone") || u.pathname.replace("/send/", "").replace("/", "");
@@ -90,55 +85,51 @@ function buildDeepLink(urlStr, userAgent) {
       if (text) qp.set("text", text);
       const q = qp.toString();
       ios = q ? `whatsapp://send?${q}` : `whatsapp://send`;
-      const fb = encodeURIComponent(fallback);
+      const fb = encodeURIComponent(chromeFallback);
       androidIntent = `intent://${waPath}${q ? `?${q}` : ""}#Intent;scheme=whatsapp;package=com.whatsapp;S.browser_fallback_url=${fb};end`;
       break;
     }
     case "telegram": {
-      // t.me/<username>
       const path = u.pathname.replace(/^\//, "");
       ios = `tg://resolve?domain=${path}`;
-      const fb = encodeURIComponent(fallback);
+      const fb = encodeURIComponent(chromeFallback);
       androidIntent = `intent://${path}#Intent;scheme=tg;package=org.telegram.messenger;S.browser_fallback_url=${fb};end`;
       break;
     }
     case "instagram": {
-      // instagram.com/<user> or /p/<code>
       const path = u.pathname;
       ios = `instagram://${path.startsWith("/p/") ? `media?id=${path.split("/")[2]}` : `user?username=${path.split("/")[1] || ""}`}`;
-      const fb = encodeURIComponent(fallback);
+      const fb = encodeURIComponent(chromeFallback);
       androidIntent = `intent://${path.replace(/^\//, "")}#Intent;scheme=instagram;package=com.instagram.android;S.browser_fallback_url=${fb};end`;
       break;
     }
     case "amazon": {
       ios = `amazon://`;
-      const fb = encodeURIComponent(fallback);
+      const fb = encodeURIComponent(chromeFallback);
       androidIntent = `intent://#Intent;scheme=amazon;package=com.amazon.mShop.android.shopping;S.browser_fallback_url=${fb};end`;
       break;
     }
     case "twitter": {
-      // x.com/twitter.com links → twitter://
       const path = u.pathname;
       ios = `twitter://` + (path.startsWith("/status/") ? `status?id=${path.split("/")[3] || ""}` : ``);
-      const fb = encodeURIComponent(fallback);
+      const fb = encodeURIComponent(chromeFallback);
       androidIntent = `intent://${path.replace(/^\//, "")}#Intent;scheme=twitter;package=com.twitter.android;S.browser_fallback_url=${fb};end`;
       break;
     }
     case "facebook": {
       ios = `fb://`;
-      const fb = encodeURIComponent(fallback);
+      const fb = encodeURIComponent(chromeFallback);
       androidIntent = `intent://#Intent;scheme=fb;package=com.facebook.katana;S.browser_fallback_url=${fb};end`;
       break;
     }
     default: {
-      // Generic behavior
-      const fb = encodeURIComponent(fallback);
+      const fb = encodeURIComponent(chromeFallback);
       androidIntent = `intent://${fallback.replace(/^https?:\/\//, "")}#Intent;scheme=https;S.browser_fallback_url=${fb};end`;
       ios = null;
     }
   }
 
-  return { ios, androidIntent, fallback };
+  return { ios, androidIntent, fallback, chromeFallback };
 }
 
 // --- API: create short link ---
@@ -153,20 +144,25 @@ app.post("/api/create", (req, res) => {
     if (!/^[a-zA-Z0-9_-]{3,32}$/.test(id)) {
       return res.status(400).json({ ok: false, error: "Slug must be 3-32 chars (a-z, 0-9, -, _)." });
     }
-    if (linkStore[id]) {
+    if (linkStore[id] || permanentLinks[id]) {
       return res.status(409).json({ ok: false, error: "Slug already in use." });
     }
   } else {
-    do { id = generateId(3); } while (linkStore[id]);
+    do { id = generateId(3); } while (linkStore[id] || permanentLinks[id]);
   }
 
-  linkStore[id] = { url, slug: id, createdAt: Date.now() };
+  const data = { url, slug: id, createdAt: Date.now() };
+
+  // ✅ store permanently
+  permanentLinks[id] = data;
+  linkStore[id] = data;
+
   return res.json({ ok: true, id, shortUrl: `http://localhost:${PORT}/r/${id}` });
 });
 
 // --- API: list recent (for UI) ---
 app.get("/api/links", (req, res) => {
-  const rows = Object.entries(linkStore)
+  const rows = Object.entries(permanentLinks)
     .map(([id, v]) => ({ id, url: v.url, createdAt: v.createdAt }))
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, 50);
@@ -175,10 +171,10 @@ app.get("/api/links", (req, res) => {
 
 // --- Redirect handler ---
 app.get("/r/:id", (req, res) => {
-  const item = linkStore[req.params.id];
+  const item = permanentLinks[req.params.id];
   if (!item) return res.status(404).send("Link not found");
 
-  const { ios, androidIntent, fallback } = buildDeepLink(item.url, req.headers["user-agent"] || "");
+  const { ios, androidIntent, fallback, chromeFallback } = buildDeepLink(item.url, req.headers["user-agent"] || "");
 
   res.setHeader("Cache-Control", "no-store");
   res.send(`<!doctype html>
@@ -191,7 +187,7 @@ app.get("/r/:id", (req, res) => {
 </head>
 <body>
   <h2>Opening the app…</h2>
-  <p>If nothing happens, <a id="fallback" href="${fallback}">tap here</a>.</p>
+  <p>If nothing happens, <a id="fallback" href="${chromeFallback}">open in Chrome</a>.</p>
   <script>
     (function(){
       var ua = navigator.userAgent || navigator.vendor || window.opera;
@@ -202,14 +198,13 @@ app.get("/r/:id", (req, res) => {
 
       if (isAndroid) {
         go(${JSON.stringify(androidIntent)});
-        setTimeout(function(){ go(${JSON.stringify(fallback)}); }, 1600);
+        setTimeout(function(){ go(${JSON.stringify(chromeFallback)}); }, 1600);
       } else if (isIOS) {
-        // Try app scheme first (if available), then web fallback
         var iosUrl = ${JSON.stringify(ios)};
         if (iosUrl) { go(iosUrl); }
-        setTimeout(function(){ go(${JSON.stringify(fallback)}); }, 1200);
+        setTimeout(function(){ go(${JSON.stringify(chromeFallback)}); }, 1200);
       } else {
-        go(${JSON.stringify(fallback)});
+        go(${JSON.stringify(chromeFallback)});
       }
     })();
   </script>
@@ -220,5 +215,3 @@ app.get("/r/:id", (req, res) => {
 app.listen(PORT, () => {
   console.log(`✅ Server running at http://localhost:${PORT}`);
 });
-
-

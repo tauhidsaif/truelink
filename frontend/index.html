@@ -20,7 +20,7 @@
         <div class="h-10 w-10 rounded-2xl bg-black text-white flex items-center justify-center text-xl">⚡</div>
         <div>
           <h1 class="text-2xl font-bold">TrueLink</h1>
-          <p class="text-sm text-gray-500">Make links open in the app — not the in‑app browser.</p>
+          <p class="text-sm text-gray-500">Make links open in the app — not the in-app browser.</p>
         </div>
       </header>
 
@@ -48,7 +48,8 @@
               <a id="shortLink" href="#" class="text-lg font-semibold break-all"></a>
             </div>
             <div class="flex items-center gap-2">
-            <button class="text-sm underline" data-copy="/r/${r.id}">Copy</button>
+              <!-- ✅ fixed: added proper id for script.js -->
+              <button id="btnCopy" class="text-sm underline">Copy</button>
               <a id="btnOpen" target="_blank" class="rounded-lg bg-gray-900 text-white px-3 py-2">Open</a>
             </div>
           </div>
@@ -82,6 +83,6 @@
 
     <!-- QRCode lib -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>   
-     <script src="script.js"></script>
+    <script src="script.js"></script>
   </body>
 </html>
